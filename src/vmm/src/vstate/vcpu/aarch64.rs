@@ -7,7 +7,7 @@
 
 use kvm_ioctls::*;
 use logger::{error, IncMetric, METRICS};
-use utils::vm_memory::{Address, GuestAddress, GuestMemoryMmap};
+use utils::vm_memory::{Address, GuestMemoryMmap};
 use versionize::{VersionMap, Versionize, VersionizeError, VersionizeResult};
 use versionize_derive::Versionize;
 
@@ -18,6 +18,7 @@ use crate::arch::aarch64::vcpu::{
     get_all_registers, get_all_registers_ids, get_mpidr, get_mpstate, get_registers, set_mpstate,
     set_registers, setup_boot_regs, VcpuError as ArchError,
 };
+use crate::arch::EntryPoint;
 use crate::cpu_config::aarch64::custom_cpu_template::VcpuFeatures;
 use crate::cpu_config::templates::CpuConfiguration;
 use crate::vcpu::{VcpuConfig, VcpuError};
@@ -101,12 +102,13 @@ impl KvmVcpu {
     /// # Arguments
     ///
     /// * `guest_mem` - The guest memory used by this microvm.
-    /// * `kernel_load_addr` - Offset from `guest_mem` at which the kernel is loaded.
+    /// * `kernel_entry_point` - Specifies the boot protocol and offset from `guest_mem` at which
+    ///   the kernel starts.
     /// * `vcpu_config` - The vCPU configuration.
     pub fn configure(
         &mut self,
         guest_mem: &GuestMemoryMmap,
-        kernel_load_addr: GuestAddress,
+        kernel_entry_point: EntryPoint,
         vcpu_config: &VcpuConfig,
     ) -> Result<(), KvmVcpuError> {
         for reg in vcpu_config.cpu_config.regs.iter() {
@@ -118,7 +120,7 @@ impl KvmVcpu {
         setup_boot_regs(
             &self.fd,
             self.index,
-            kernel_load_addr.raw_value(),
+            kernel_entry_point.entry_addr.raw_value(),
             guest_mem,
         )
         .map_err(KvmVcpuError::ConfigureRegisters)?;
@@ -306,10 +308,11 @@ mod tests {
     use std::os::unix::io::AsRawFd;
 
     use kvm_bindings::KVM_REG_SIZE_U64;
-    use utils::vm_memory::GuestMemoryMmap;
+    use utils::vm_memory::{GuestAddress, GuestMemoryMmap};
 
     use super::*;
     use crate::arch::aarch64::regs::Aarch64RegisterRef;
+    use crate::arch::BootProtocol;
     use crate::cpu_config::aarch64::CpuConfiguration;
     use crate::cpu_config::templates::RegisterValueFilter;
     use crate::vcpu::VcpuConfig;
@@ -351,7 +354,10 @@ mod tests {
         assert!(vcpu
             .configure(
                 &vm_mem,
-                GuestAddress(crate::arch::get_kernel_start()),
+                EntryPoint {
+                    entry_addr: GuestAddress(crate::arch::get_kernel_start()),
+                    protocol: BootProtocol::LinuxBoot,
+                },
                 &vcpu_config,
             )
             .is_ok());
@@ -360,7 +366,10 @@ mod tests {
 
         let err = vcpu.configure(
             &vm_mem,
-            GuestAddress(crate::arch::get_kernel_start()),
+            EntryPoint {
+                entry_addr: GuestAddress(crate::arch::get_kernel_start()),
+                protocol: BootProtocol::LinuxBoot,
+            },
             &vcpu_config,
         );
         assert!(err.is_err());
